@@ -1,13 +1,138 @@
-import { Request,Response } from 'express';
-import { randomUUID } from 'node:crypto';
-import { z } from 'zod';
-import { prisma } from '../config/database';
-import { encrypt } from '../services/crypto.service';
-import { enqueueEmail } from '../queues/email.queue';
-const senderSchema=z.object({name:z.string().min(1),email:z.string().email(),smtpHost:z.string().min(1),smtpPort:z.coerce.number().int().positive().default(587),smtpSecure:z.boolean().default(false),smtpUsername:z.string().min(1),smtpPassword:z.string().min(1),minDelayMs:z.coerce.number().int().min(0).default(2000),hourlyLimit:z.coerce.number().int().positive().default(100)});
-const emailSchema=z.object({senderId:z.string().uuid(),recipient:z.string().email(),subject:z.string().min(1),body:z.string().min(1),scheduledAt:z.coerce.date().optional(),idempotencyKey:z.string().min(8).optional()});
-export async function listSenders(req:Request,res:Response){res.json({senders:await prisma.sender.findMany({where:{userId:req.userId},orderBy:{createdAt:'desc'}})});}
-export async function createSender(req:Request,res:Response){const p=senderSchema.parse(req.body);const sender=await prisma.sender.create({data:{...p,userId:req.userId!,smtpUsernameEncrypted:encrypt(p.smtpUsername),smtpPasswordEncrypted:encrypt(p.smtpPassword)} });res.status(201).json({sender:{id:sender.id,name:sender.name,email:sender.email,smtpHost:sender.smtpHost,hourlyLimit:sender.hourlyLimit}});}
-export async function listEmails(req:Request,res:Response){const emails=await prisma.scheduledEmail.findMany({where:{userId:req.userId},orderBy:{scheduledAt:'desc'},take:200,include:{sender:{select:{name:true,email:true}}}});res.json({emails});}
-export async function createEmail(req:Request,res:Response){const p=emailSchema.parse(req.body);const sender=await prisma.sender.findFirst({where:{id:p.senderId,userId:req.userId,isActive:true}});if(!sender)return res.status(404).json({error:'Active sender not found'});const scheduledAt=p.scheduledAt||new Date();const key=p.idempotencyKey||randomUUID();const email=await prisma.scheduledEmail.upsert({where:{idempotencyKey:key},update:{},create:{userId:req.userId!,senderId:sender.id,recipient:p.recipient,subject:p.subject,body:p.body,scheduledAt,idempotencyKey:key,status:scheduledAt>new Date()?'SCHEDULED':'QUEUED'}});if(email.userId!==req.userId)return res.status(409).json({error:'Idempotency key already belongs to another user'});const job=await enqueueEmail(email.id,scheduledAt);await prisma.scheduledEmail.update({where:{id:email.id},data:{queueJobId:email.id,status:scheduledAt>new Date()?'SCHEDULED':'QUEUED'}});res.status(201).json({email,jobId:job.id});}
-export async function cancelEmail(req:Request,res:Response){const email=await prisma.scheduledEmail.findFirst({where:{id:String(req.params.id),userId:req.userId}});if(!email)return res.status(404).json({error:'Email not found'});if(['SENT','PROCESSING'].includes(email.status))return res.status(409).json({error:'Email is already being processed or has been sent'});await prisma.scheduledEmail.update({where:{id:email.id},data:{status:'CANCELLED'}});res.json({success:true});}
+import { Request, Response } from "express";
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import { prisma } from "../config/database";
+import { encrypt } from "../services/crypto.service";
+import { enqueueEmail } from "../queues/email.queue";
+const senderSchema = z.object({
+  name: z.string().min(1),
+  email: z.string().email(),
+  smtpHost: z.string().min(1),
+  smtpPort: z.coerce.number().int().positive().default(587),
+  smtpSecure: z.boolean().default(false),
+  smtpUsername: z.string().min(1),
+  smtpPassword: z.string().min(1),
+  minDelayMs: z.coerce.number().int().min(0).default(2000),
+  hourlyLimit: z.coerce.number().int().positive().default(100),
+});
+const emailSchema = z.object({
+  senderId: z.string().uuid(),
+  recipient: z.string().email(),
+  subject: z.string().min(1),
+  body: z.string().min(1),
+  scheduledAt: z.coerce.date().optional(),
+  idempotencyKey: z.string().min(8).optional(),
+});
+export async function listSenders(req: Request, res: Response) {
+  res.json({
+    senders: await prisma.sender.findMany({
+      where: { userId: req.userId },
+      orderBy: { createdAt: "desc" },
+    }),
+  });
+}
+// export async function createSender(req: Request, res: Response) {
+//   const p = senderSchema.parse(req.body);
+//   const sender = await prisma.sender.create({
+//     data: {
+//       ...p,
+//       userId: req.userId!,
+//       smtpUsernameEncrypted: encrypt(p.smtpUsername),
+//       smtpPasswordEncrypted: encrypt(p.smtpPassword),
+//     },
+//   });
+//   res
+//     .status(201)
+//     .json({
+//       sender: {
+//         id: sender.id,
+//         name: sender.name,
+//         email: sender.email,
+//         smtpHost: sender.smtpHost,
+//         hourlyLimit: sender.hourlyLimit,
+//       },
+//     });
+// }
+
+export async function createSender(req: Request, res: Response) {
+  const p = senderSchema.parse(req.body);
+
+  const sender = await prisma.sender.create({
+    data: {
+      name: p.name,
+      email: p.email,
+      smtpHost: p.smtpHost,
+      smtpPort: p.smtpPort,
+      smtpSecure: p.smtpSecure,
+      minDelayMs: p.minDelayMs,
+      hourlyLimit: p.hourlyLimit,
+      userId: req.userId!,
+      smtpUsernameEncrypted: encrypt(p.smtpUsername),
+      smtpPasswordEncrypted: encrypt(p.smtpPassword),
+    },
+  });
+
+  res.status(201).json({ sender });
+}
+
+export async function listEmails(req: Request, res: Response) {
+  const emails = await prisma.scheduledEmail.findMany({
+    where: { userId: req.userId },
+    orderBy: { scheduledAt: "desc" },
+    take: 200,
+    include: { sender: { select: { name: true, email: true } } },
+  });
+  res.json({ emails });
+}
+export async function createEmail(req: Request, res: Response) {
+  const p = emailSchema.parse(req.body);
+  const sender = await prisma.sender.findFirst({
+    where: { id: p.senderId, userId: req.userId, isActive: true },
+  });
+  if (!sender)
+    return res.status(404).json({ error: "Active sender not found" });
+  const scheduledAt = p.scheduledAt || new Date();
+  const key = p.idempotencyKey || randomUUID();
+  const email = await prisma.scheduledEmail.upsert({
+    where: { idempotencyKey: key },
+    update: {},
+    create: {
+      userId: req.userId!,
+      senderId: sender.id,
+      recipient: p.recipient,
+      subject: p.subject,
+      body: p.body,
+      scheduledAt,
+      idempotencyKey: key,
+      status: scheduledAt > new Date() ? "SCHEDULED" : "QUEUED",
+    },
+  });
+  if (email.userId !== req.userId)
+    return res
+      .status(409)
+      .json({ error: "Idempotency key already belongs to another user" });
+  const job = await enqueueEmail(email.id, scheduledAt);
+  await prisma.scheduledEmail.update({
+    where: { id: email.id },
+    data: {
+      queueJobId: email.id,
+      status: scheduledAt > new Date() ? "SCHEDULED" : "QUEUED",
+    },
+  });
+  res.status(201).json({ email, jobId: job.id });
+}
+export async function cancelEmail(req: Request, res: Response) {
+  const email = await prisma.scheduledEmail.findFirst({
+    where: { id: String(req.params.id), userId: req.userId },
+  });
+  if (!email) return res.status(404).json({ error: "Email not found" });
+  if (["SENT", "PROCESSING"].includes(email.status))
+    return res
+      .status(409)
+      .json({ error: "Email is already being processed or has been sent" });
+  await prisma.scheduledEmail.update({
+    where: { id: email.id },
+    data: { status: "CANCELLED" },
+  });
+  res.json({ success: true });
+}
