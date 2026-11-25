@@ -1,0 +1,25 @@
+import 'dotenv/config';
+
+import IORedis from 'ioredis';
+
+import { env } from './env';
+
+const redisUrl = process.env.REDIS_URL;
+
+if (!redisUrl) {
+  throw new Error('REDIS_URL is missing');
+}
+
+export function createRedisConnection(): IORedis {
+  const parsed = new URL(redisUrl);
+
+  return new IORedis(redisUrl, {
+    maxRetriesPerRequest: null,
+    enableReadyCheck: true,
+    connectTimeout: 10_000,
+    tls:
+      parsed.protocol === 'rediss:'
+        ? { servername: parsed.hostname }
+        : undefined,
+  });
+}
