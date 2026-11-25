@@ -1,0 +1,1 @@
+import {Router} from 'express';import {googleStart,googleCallback,me} from '../controllers/auth.controller';import {requireAuth} from '../middleware/auth.middleware';const r=Router();r.get('/google',googleStart);r.get('/google/callback',googleCallback);r.get('/me',requireAuth,me);export default r;

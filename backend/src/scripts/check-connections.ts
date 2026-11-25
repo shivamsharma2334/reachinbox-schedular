@@ -1,0 +1,3 @@
+import 'dotenv/config';import {randomUUID} from 'node:crypto';import {prisma} from '../config/database';import {createRedisConnection} from '../config/redis';
+async function main(){const redis=createRedisConnection();try{const rows=await prisma.$queryRaw<Array<{database:string;server_time:Date}>>`SELECT current_database() AS database, NOW() AS server_time`;console.log('PostgreSQL connected:',rows[0]);console.log('Redis ping:',await redis.ping());const key=`reachinbox:test:${randomUUID()}`;await redis.set(key,'connection-ok','EX',30);console.log('Redis read/write:',await redis.get(key));await redis.del(key);}finally{await prisma.$disconnect();await redis.quit();}}
+main().catch(e=>{console.error(e);process.exit(1);});

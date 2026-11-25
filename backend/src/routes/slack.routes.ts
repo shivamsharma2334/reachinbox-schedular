@@ -1,0 +1,1 @@
+import {Router} from 'express';import {slackStart,slackCallback} from '../controllers/slack.controller';import {requireAuth} from '../middleware/auth.middleware';const r=Router();r.get('/connect',requireAuth,slackStart);r.get('/callback',slackCallback);export default r;
